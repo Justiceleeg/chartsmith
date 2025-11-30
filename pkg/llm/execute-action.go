@@ -20,8 +20,8 @@ const (
 	TextEditor_Sonnet37 = "text_editor_20250124"
 	TextEditor_Sonnet35 = "text_editor_20241022"
 
-	Model_Sonnet37 = "claude-3-7-sonnet-20250219"
-	Model_Sonnet35 = "claude-3-5-sonnet-20241022"
+	Model_Sonnet37 = "claude-sonnet-4-20250514"
+	Model_Sonnet35 = "claude-sonnet-4-20250514"
 
 	minFuzzyMatchLen  = 50 // Minimum length for fuzzy matching
 	fuzzyMatchTimeout = 10 * time.Second

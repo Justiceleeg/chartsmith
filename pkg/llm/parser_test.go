@@ -46,6 +46,74 @@ func TestParser_ParsePlan(t *testing.T) {
 				Artifacts: []types.Artifact{},
 			},
 		},
+		{
+			name:  "handles empty input",
+			input: "",
+			expected: HelmResponse{
+				Title:     "",
+				Actions:   map[string]types.ActionPlan{},
+				Artifacts: []types.Artifact{},
+			},
+		},
+		{
+			name:  "handles input with no plan tags",
+			input: "This is just plain text without any XML tags",
+			expected: HelmResponse{
+				Title:     "",
+				Actions:   map[string]types.ActionPlan{},
+				Artifacts: []types.Artifact{},
+			},
+		},
+		{
+			name: "parses delete action",
+			input: `<chartsmithArtifactPlan title="Cleanup Plan">
+<chartsmithActionPlan type="file" action="delete" path="templates/old-deployment.yaml">
+</chartsmithActionPlan>`,
+			expected: HelmResponse{
+				Title: "Cleanup Plan",
+				Actions: map[string]types.ActionPlan{
+					"templates/old-deployment.yaml": {
+						Type:   "file",
+						Action: "delete",
+					},
+				},
+				Artifacts: []types.Artifact{},
+			},
+		},
+		{
+			name: "strips leading slash from path",
+			input: `<chartsmithArtifactPlan title="Test">
+<chartsmithActionPlan type="file" action="create" path="/Chart.yaml">
+</chartsmithActionPlan>`,
+			expected: HelmResponse{
+				Title: "Test",
+				Actions: map[string]types.ActionPlan{
+					"Chart.yaml": {
+						Type:   "file",
+						Action: "create",
+					},
+				},
+				Artifacts: []types.Artifact{},
+			},
+		},
+		{
+			name: "handles multiple plans with same structure",
+			input: `<chartsmithArtifactPlan title="Multi-file Plan">
+<chartsmithActionPlan type="file" action="create" path="values.yaml"></chartsmithActionPlan>
+<chartsmithActionPlan type="file" action="create" path="Chart.yaml"></chartsmithActionPlan>
+<chartsmithActionPlan type="file" action="update" path="templates/deployment.yaml"></chartsmithActionPlan>
+<chartsmithActionPlan type="file" action="delete" path="templates/legacy.yaml"></chartsmithActionPlan>`,
+			expected: HelmResponse{
+				Title: "Multi-file Plan",
+				Actions: map[string]types.ActionPlan{
+					"values.yaml":               {Type: "file", Action: "create"},
+					"Chart.yaml":                {Type: "file", Action: "create"},
+					"templates/deployment.yaml": {Type: "file", Action: "update"},
+					"templates/legacy.yaml":     {Type: "file", Action: "delete"},
+				},
+				Artifacts: []types.Artifact{},
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -73,8 +141,8 @@ func TestParser_ParseArtifacts(t *testing.T) {
 		expected []types.Artifact
 	}{
 		{
-			name: "parses complete Chart.yaml",
-			input: `<chartsmithArtifact>
+			name: "parses complete Chart.yaml with path",
+			input: `<chartsmithArtifact path="Chart.yaml">
 apiVersion: v2
 name: wordpress
 description: A Helm chart for WordPress
@@ -88,8 +156,8 @@ version: 1.0.0
 			},
 		},
 		{
-			name: "parses partial artifact",
-			input: `<chartsmithArtifact>
+			name: "parses partial artifact with path",
+			input: `<chartsmithArtifact path="Chart.yaml">
 apiVersion: v2
 name: wordpress
 description: A Helm chart`,
@@ -101,34 +169,77 @@ description: A Helm chart`,
 			},
 		},
 		{
-			name: "handles multiple artifacts with partial",
-			input: `<chartsmithArtifact>
+			name: "handles multiple artifacts with different paths",
+			input: `<chartsmithArtifact path="Chart.yaml">
 apiVersion: v2
 name: chart1
 </chartsmithArtifact>
-<chartsmithArtifact>
-apiVersion: v2
-name: chart2`,
+<chartsmithArtifact path="values.yaml">
+replicaCount: 1
+image:
+  tag: latest`,
 			expected: []types.Artifact{
 				{
 					Path:    "Chart.yaml",
 					Content: "apiVersion: v2\nname: chart1",
 				},
 				{
-					Path:    "Chart.yaml",
-					Content: "apiVersion: v2\nname: chart2",
+					Path:    "values.yaml",
+					Content: "replicaCount: 1\nimage:\n  tag: latest",
 				},
 			},
 		},
 		{
-			name: "handles streaming chunks",
-			input: `<chartsmithArtifact>
+			name: "handles streaming chunks with path",
+			input: `<chartsmithArtifact path="Chart.yaml">
 apiVersion: v2
 name: wordpr`,
 			expected: []types.Artifact{
 				{
 					Path:    "Chart.yaml",
 					Content: "apiVersion: v2\nname: wordpr",
+				},
+			},
+		},
+		{
+			name:     "handles empty input",
+			input:    "",
+			expected: []types.Artifact{},
+		},
+		{
+			name:     "handles input without artifacts",
+			input:    "This is just plain text",
+			expected: []types.Artifact{},
+		},
+		{
+			name:     "ignores artifact without path attribute",
+			input:    `<chartsmithArtifact>content without path</chartsmithArtifact>`,
+			expected: []types.Artifact{},
+		},
+		{
+			name: "parses nested template path",
+			input: `<chartsmithArtifact path="templates/deployment.yaml">
+apiVersion: apps/v1
+kind: Deployment
+</chartsmithArtifact>`,
+			expected: []types.Artifact{
+				{
+					Path:    "templates/deployment.yaml",
+					Content: "apiVersion: apps/v1\nkind: Deployment",
+				},
+			},
+		},
+		{
+			name: "handles special characters in content",
+			input: `<chartsmithArtifact path="templates/configmap.yaml">
+data:
+  config.json: |
+    {"key": "value", "nested": {"a": 1}}
+</chartsmithArtifact>`,
+			expected: []types.Artifact{
+				{
+					Path:    "templates/configmap.yaml",
+					Content: "data:\n  config.json: |\n    {\"key\": \"value\", \"nested\": {\"a\": 1}}",
 				},
 			},
 		},

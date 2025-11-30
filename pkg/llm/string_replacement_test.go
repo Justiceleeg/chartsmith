@@ -25,7 +25,7 @@ func TestPerformStringReplacement(t *testing.T) {
 			wantSuccess: true,
 		},
 		{
-			name:           "String not found",
+			name:           "String not found - short string below fuzzy threshold",
 			content:        "Hello, world! This is a test.",
 			oldStr:         "This text doesn't exist",
 			newStr:         "Replacement text",
@@ -48,6 +48,81 @@ func TestPerformStringReplacement(t *testing.T) {
 			newStr:      "",
 			wantContent: "Hello, world! a test.",
 			wantSuccess: true,
+		},
+		// Fuzzy matching boundary tests
+		{
+			name:           "String exactly at 50 char minimum - not found",
+			content:        "Some content that does not contain the search text",
+			oldStr:         "12345678901234567890123456789012345678901234567890", // exactly 50 chars
+			newStr:         "replacement",
+			wantContent:    "Some content that does not contain the search text",
+			wantSuccess:    false,
+			wantErrContent: "Approximate match for replacement not found",
+		},
+		{
+			name:           "String below 50 char minimum - fuzzy matching skipped",
+			content:        "Some content here",
+			oldStr:         "1234567890123456789012345678901234567890123456789", // 49 chars
+			newStr:         "replacement",
+			wantContent:    "Some content here",
+			wantSuccess:    false,
+			wantErrContent: "Approximate match for replacement not found",
+		},
+		// Actual fuzzy matching tests - these test the fuzzy algorithm
+		{
+			name: "Fuzzy match fails with trailing whitespace difference - fuzzy matcher does not normalize whitespace",
+			content: `apiVersion: v2
+name: wordpress
+version: 1.0.0
+description: A chart for WordPress deployment on Kubernetes`,
+			oldStr: `apiVersion: v2
+name: wordpress
+version: 1.0.0
+description: A chart for WordPress deployment on Kubernetes  `, // trailing spaces cause mismatch
+			newStr: `apiVersion: v2
+name: wordpress
+version: 2.0.0
+description: Updated WordPress chart`,
+			wantContent: `apiVersion: v2
+name: wordpress
+version: 1.0.0
+description: A chart for WordPress deployment on Kubernetes`, // unchanged - no match found
+			wantSuccess:    false,
+			wantErrContent: "Approximate match for replacement not found",
+		},
+		{
+			name:           "No match when strings are completely different and long",
+			content:        "This is a completely different piece of content that has nothing in common with the search string at all and is quite long",
+			oldStr:         "Lorem ipsum dolor sit amet consectetur adipiscing elit sed do eiusmod tempor incididunt ut labore",
+			newStr:         "replacement",
+			wantContent:    "This is a completely different piece of content that has nothing in common with the search string at all and is quite long",
+			wantSuccess:    false,
+			wantErrContent: "Approximate match for replacement not found",
+		},
+		// This test exercises actual fuzzy matching where the search string is a subset of content
+		{
+			name: "Fuzzy match succeeds when content contains oldStr plus extra text",
+			content: `# Header comment
+apiVersion: v2
+name: wordpress
+version: 1.0.0
+description: A chart for WordPress deployment on Kubernetes
+# This is a footer comment that was added later`,
+			oldStr: `apiVersion: v2
+name: wordpress
+version: 1.0.0
+description: A chart for WordPress deployment on Kubernetes`,
+			newStr: `apiVersion: v2
+name: wordpress
+version: 2.0.0
+description: Updated chart`,
+			wantContent: `# Header comment
+apiVersion: v2
+name: wordpress
+version: 2.0.0
+description: Updated chart
+# This is a footer comment that was added later`,
+			wantSuccess: true, // exact match succeeds because oldStr is substring of content
 		},
 		{
 			name:        "Real world success - Chart.yaml dependencies",

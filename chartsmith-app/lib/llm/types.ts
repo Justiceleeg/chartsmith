@@ -24,3 +24,23 @@ export interface HelmResponse {
   actions: Record<string, ActionPlan>;
   artifacts: Artifact[];
 }
+
+/**
+ * Intent classification result from the LLM.
+ * Ported from pkg/workspace/types/types.go Intent struct.
+ */
+export interface Intent {
+  isConversational: boolean;
+  isPlan: boolean;
+  isOffTopic: boolean;
+  isChartDeveloper: boolean;
+  isChartOperator: boolean;
+  isProceed: boolean;
+  isRender: boolean;
+}
+
+/**
+ * Persona type for intent classification context.
+ * Affects which intent flags are checked.
+ */
+export type ChatMessageFromPersona = 'auto' | 'developer' | 'operator';

@@ -4,6 +4,7 @@
  */
 
 import { anthropic } from '@ai-sdk/anthropic';
+import { groq } from '@ai-sdk/groq';
 import { createMockModel, shouldUseMock } from './mock-provider';
 
 /**
@@ -17,4 +18,15 @@ export function getChatModel() {
     ]);
   }
   return anthropic('claude-sonnet-4-20250514');
+}
+
+/**
+ * Get the intent classification model.
+ * Uses Groq's Llama 3.3 70B for fast, cost-effective intent classification.
+ */
+export function getIntentModel() {
+  if (shouldUseMock()) {
+    return createMockModel(['{"isConversational": true, "isPlan": false, "isOffTopic": false}']);
+  }
+  return groq('llama-3.3-70b-versatile');
 }

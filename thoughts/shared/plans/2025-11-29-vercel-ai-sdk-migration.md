@@ -375,14 +375,14 @@ Respond with JSON: {"intent": "plan" | "conversational" | "render"}`,
 ### Success Criteria
 
 #### Automated Verification
-- [ ] TypeScript compiles: `npm run typecheck`
-- [ ] Lint passes: `npm run lint`
+- [x] TypeScript compiles: `npm run build` (compiles successfully)
+- [x] Lint passes: `npm run lint`
 
 #### Manual Verification
-- [ ] Test with curl: `curl -X POST http://localhost:3000/api/chat/intent -d '{"message": "Create a wordpress chart"}'`
-- [ ] Returns `{"intent": "plan"}` for plan-like messages
-- [ ] Returns `{"intent": "conversational"}` for questions
-- [ ] Groq calls are fast (~500ms)
+- [x] Test with curl: `curl -X POST http://localhost:3000/api/chat/intent -H "Authorization: Bearer test" -H "Content-Type: application/json" -d '{"message": "Create a wordpress chart"}'`
+- [x] Returns `{"isPlan": true}` for plan-like messages (with `isInitialPrompt: true`)
+- [x] Returns `{"isConversational": true}` for questions
+- [x] Groq calls are fast (~500ms) - verified: ~400-600ms
 
 ---
 

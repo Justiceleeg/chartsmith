@@ -210,11 +210,11 @@ describe('performStringReplacement', () => {
 ### Success Criteria
 
 #### Automated Verification
-- [ ] Packages install without errors: `cd chartsmith-app && npm install`
-- [ ] TypeScript compiles: `npm run typecheck` (or `tsc --noEmit`)
-- [ ] Parser tests pass: `npm test -- --testPathPattern="parser.test"`
-- [ ] Fuzzy match tests pass: `npm test -- --testPathPattern="fuzzy-match.test"`
-- [ ] Lint passes: `npm run lint`
+- [x] Packages install without errors: `cd chartsmith-app && npm install`
+- [x] TypeScript compiles: `npm run typecheck` (or `tsc --noEmit`)
+- [x] Parser tests pass: `npm test -- --testPathPattern="parser.test"`
+- [x] Fuzzy match tests pass: `npm test -- --testPathPattern="fuzzy-match.test"`
+- [x] Lint passes: `npm run lint`
 
 #### Manual Verification
 - [ ] Review ported code matches Go behavior
@@ -312,14 +312,14 @@ curl -X POST http://localhost:3000/api/chat \
 ### Success Criteria
 
 #### Automated Verification
-- [ ] TypeScript compiles: `npm run typecheck`
-- [ ] Lint passes: `npm run lint`
-- [ ] Dev server starts: `npm run dev`
+- [x] TypeScript compiles: `npm run typecheck`
+- [x] Lint passes: `npm run lint`
+- [x] Dev server starts: `npm run dev`
 
 #### Manual Verification
-- [ ] With `MOCK_LLM_RESPONSES=true`: curl returns mock streaming response
-- [ ] With real API key (optional): curl returns real streaming response
-- [ ] Response streams incrementally (not all at once)
+- [x] With `MOCK_LLM_RESPONSES=true`: curl returns mock streaming response
+- [x] With real API key (optional): curl returns real streaming response
+- [x] Response streams incrementally (not all at once)
 
 **Implementation Note**: Test with mocked responses first. Only test real API if needed.
 

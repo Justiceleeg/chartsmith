@@ -10,6 +10,13 @@ import { createChatMessageAction } from "@/lib/workspace/actions/create-chat-mes
 import { ScrollingContent } from "./ScrollingContent";
 import { NewChartChatMessage } from "./NewChartChatMessage";
 import { NewChartContent } from "./NewChartContent";
+import { useAIChat } from "@/hooks/useAIChat";
+
+// Feature flag to toggle between Centrifugo (old) and Vercel AI SDK (new) chat systems
+const useVercelAISDK = process.env.NEXT_PUBLIC_USE_VERCEL_AI_SDK === "true";
+
+// Debug log to verify feature flag status
+console.log("[ChatContainer] Feature flag NEXT_PUBLIC_USE_VERCEL_AI_SDK:", process.env.NEXT_PUBLIC_USE_VERCEL_AI_SDK, "-> useVercelAISDK:", useVercelAISDK);
 
 interface ChatContainerProps {
   session: Session;
@@ -20,12 +27,29 @@ export function ChatContainer({ session }: ChatContainerProps) {
   const [workspace] = useAtom(workspaceAtom)
   const [messages, setMessages] = useAtom(messagesAtom)
   const [isRendering] = useAtom(isRenderingAtom)
-  const [chatInput, setChatInput] = useState("");
+
+  // Local state for Centrifugo mode
+  const [localChatInput, setLocalChatInput] = useState("");
   const [selectedRole, setSelectedRole] = useState<"auto" | "developer" | "operator">("auto");
   const [isRoleMenuOpen, setIsRoleMenuOpen] = useState(false);
   const roleMenuRef = useRef<HTMLDivElement>(null);
-  
-  // No need for refs as ScrollingContent manages its own scrolling
+
+  // AI SDK hook for Vercel AI SDK mode
+  // Note: We always call the hook to follow React rules, but only use its values when flag is enabled
+  const aiChat = useAIChat({
+    workspaceId: workspace?.id || "",
+    sessionToken: session?.id,
+  });
+
+  // Unified interface - use AI SDK or local state based on feature flag
+  const chatInput = useVercelAISDK ? aiChat.input : localChatInput;
+  const setChatInput = useVercelAISDK
+    ? (value: string | ((prev: string) => string)) => {
+        const newValue = typeof value === "function" ? value(aiChat.input) : value;
+        aiChat.setInput(newValue);
+      }
+    : setLocalChatInput;
+  const isAIChatLoading = useVercelAISDK ? aiChat.isLoading : false;
 
   // Close the role menu when clicking outside
   useEffect(() => {
@@ -34,7 +58,7 @@ export function ChatContainer({ session }: ChatContainerProps) {
         setIsRoleMenuOpen(false);
       }
     };
-    
+
     document.addEventListener('mousedown', handleClickOutside);
     return () => {
       document.removeEventListener('mousedown', handleClickOutside);
@@ -47,14 +71,21 @@ export function ChatContainer({ session }: ChatContainerProps) {
 
   const handleSubmitChat = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!chatInput.trim() || isRendering) return; // Don't submit if rendering is in progress
+    if (!chatInput.trim() || isRendering || isAIChatLoading) return;
 
     if (!session || !workspace) return;
 
-    const chatMessage = await createChatMessageAction(session, workspace.id, chatInput.trim(), selectedRole);
-    setMessages(prev => [...prev, chatMessage]);
-
-    setChatInput("");
+    if (useVercelAISDK) {
+      // Use Vercel AI SDK
+      console.log("[ChatContainer] Submitting via Vercel AI SDK");
+      aiChat.handleSubmit(e as React.FormEvent<HTMLFormElement>);
+    } else {
+      // Use existing Centrifugo-based system
+      console.log("[ChatContainer] Submitting via Centrifugo (old system)");
+      const chatMessage = await createChatMessageAction(session, workspace.id, chatInput.trim(), selectedRole);
+      setMessages(prev => [...prev, chatMessage]);
+      setLocalChatInput("");
+    }
   };
   
   const getRoleLabel = (role: "auto" | "developer" | "operator"): string => {
@@ -76,15 +107,29 @@ export function ChatContainer({ session }: ChatContainerProps) {
     // For NewChartContent, create a simpler version of handleSubmitChat that doesn't use role selector
     const handleNewChartSubmitChat = async (e: React.FormEvent) => {
       e.preventDefault();
-      if (!chatInput.trim() || isRendering) return;
-      if (!session || !workspace) return;
+      console.log("[ChatContainer] handleNewChartSubmitChat called", { chatInput, isRendering, isAIChatLoading, useVercelAISDK });
+      if (!chatInput.trim() || isRendering || isAIChatLoading) {
+        console.log("[ChatContainer] Early return - empty input or loading");
+        return;
+      }
+      if (!session || !workspace) {
+        console.log("[ChatContainer] Early return - no session or workspace");
+        return;
+      }
 
-      // Always use AUTO for new chart creation
-      const chatMessage = await createChatMessageAction(session, workspace.id, chatInput.trim(), "auto");
-      setMessages(prev => [...prev, chatMessage]);
-      setChatInput("");
+      if (useVercelAISDK) {
+        // Use Vercel AI SDK
+        console.log("[ChatContainer] NewChart: Submitting via Vercel AI SDK");
+        aiChat.handleSubmit(e as React.FormEvent<HTMLFormElement>);
+      } else {
+        // Always use AUTO for new chart creation
+        console.log("[ChatContainer] NewChart: Submitting via Centrifugo");
+        const chatMessage = await createChatMessageAction(session, workspace.id, chatInput.trim(), "auto");
+        setMessages(prev => [...prev, chatMessage]);
+        setLocalChatInput("");
+      }
     };
-    
+
     return <NewChartContent
       session={session}
       chatInput={chatInput}
@@ -121,7 +166,7 @@ export function ChatContainer({ session }: ChatContainerProps) {
             onKeyDown={(e) => {
               if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
-                if (!isRendering) {
+                if (!isRendering && !isAIChatLoading) {
                   handleSubmitChat(e);
                 }
               }
@@ -203,16 +248,16 @@ export function ChatContainer({ session }: ChatContainerProps) {
             {/* Send button */}
             <button
               type="submit"
-              disabled={isRendering}
+              disabled={isRendering || isAIChatLoading}
               className={`p-1.5 rounded-full ${
-                isRendering
+                isRendering || isAIChatLoading
                   ? theme === "dark" ? "text-gray-600 cursor-not-allowed" : "text-gray-300 cursor-not-allowed"
                   : theme === "dark"
                     ? "text-gray-400 hover:text-gray-200 hover:bg-dark-border/40"
                     : "text-gray-500 hover:text-gray-700 hover:bg-gray-100"
               }`}
             >
-              {isRendering ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+              {isRendering || isAIChatLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
             </button>
           </div>
         </form>

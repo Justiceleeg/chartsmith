@@ -8,6 +8,9 @@ import { NewChartChatMessage } from "./NewChartChatMessage";
 import { createRevisionAction } from "@/lib/workspace/actions/create-revision";
 import { useEffect, useState } from "react";
 
+// Feature flag to toggle between Centrifugo (old) and Vercel AI SDK (new) chat systems
+const useVercelAISDK = process.env.NEXT_PUBLIC_USE_VERCEL_AI_SDK === "true";
+
 interface NewChartContentProps {
   session: Session;
   chatInput: string;
@@ -21,12 +24,16 @@ export function NewChartContent({ session, chatInput, setChatInput, handleSubmit
   const [isRendering] = useAtom(isRenderingAtom);
   const [, setWorkspace] = useAtom(workspaceAtom);
   const [plans] = useAtom(plansAtom);
+
+  // Show input when:
+  // - AI SDK mode: always show (user needs to submit their prompt)
+  // - Old mode: only when there's a plan in "review" status
   const [showInput, setShowInput] = useState(() =>
-    plans.length > 0 && plans[0].status === "review"
+    useVercelAISDK || (plans.length > 0 && plans[0].status === "review")
   );
 
   useEffect(() => {
-    setShowInput(plans.length > 0 && plans[0].status === "review");
+    setShowInput(useVercelAISDK || (plans.length > 0 && plans[0].status === "review"));
   }, [plans]);
 
   const handleCreateChart = async () => {

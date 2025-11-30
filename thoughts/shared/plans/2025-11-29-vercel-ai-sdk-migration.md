@@ -456,16 +456,16 @@ NEXT_PUBLIC_USE_VERCEL_AI_SDK=false  # Start with old system
 ### Success Criteria
 
 #### Automated Verification
-- [ ] TypeScript compiles: `npm run typecheck`
-- [ ] Lint passes: `npm run lint`
-- [ ] App builds: `npm run build`
+- [x] TypeScript compiles: `npm run typecheck` (or `tsc --noEmit`)
+- [x] Lint passes: `npm run lint`
+- [x] App builds: `npm run build`
 
 #### Manual Verification
-- [ ] With `NEXT_PUBLIC_USE_VERCEL_AI_SDK=false`: App uses Centrifugo (existing behavior)
-- [ ] With `NEXT_PUBLIC_USE_VERCEL_AI_SDK=true`: App uses new AI SDK route
-- [ ] Messages stream in UI with new system
-- [ ] Chat history loads correctly
-- [ ] Can toggle between systems by changing env var
+- [x] With `NEXT_PUBLIC_USE_VERCEL_AI_SDK=false`: App uses Centrifugo (existing behavior)
+- [x] With `NEXT_PUBLIC_USE_VERCEL_AI_SDK=true`: App uses new AI SDK route
+- [x] Messages stream in UI with new system
+- [x] Chat history loads correctly (via atom state; DB persistence deferred to Phase 7)
+- [x] Can toggle between systems by changing env var
 
 ---
 

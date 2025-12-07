@@ -230,12 +230,12 @@ export function PlanChatMessage({
                 <ReactMarkdown>{plan.description}</ReactMarkdown>
               </div>
             )}
-            {(plan.status === 'applying' || plan.status === 'applied') && (
+            {(plan.status === 'review' || plan.status === 'applying' || plan.status === 'applied') && (
               <div className="mt-4 light:border light:border-gray-200 pt-4 px-3 pb-2 rounded-lg bg-primary/5 dark:bg-dark-surface">
                 <div className="flex items-center justify-between mb-2" ref={actionsRef}>
                   <span className={`text-xs ${theme === "dark" ? "text-gray-400" : "text-gray-500"}`}>
-                    {(!plan.actionFiles || plan.actionFiles.length === 0) && plan.status === 'applying'
-                      ? "selecting files..."
+                    {(!plan.actionFiles || plan.actionFiles.length === 0)
+                      ? (plan.status === 'applying' ? "selecting files..." : "no file changes")
                       : `${plan.actionFiles?.length || 0} file ${(plan.actionFiles?.length || 0) === 1 ? 'change' : 'changes'}`
                     }
                   </span>

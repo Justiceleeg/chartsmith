@@ -114,18 +114,20 @@ export function NewChartContent({ session, chatInput, setChatInput, handleSubmit
                     </button>
                   </div>
                 </div>
-                <button
-                  type="button"
-                  disabled={isRendering || !messages.length}
-                  onClick={handleCreateChart}
-                  className={`px-4 py-2 rounded-md text-sm font-medium self-center whitespace-nowrap ${
-                    isRendering || !messages.length
-                      ? "bg-gray-300 cursor-not-allowed text-gray-500"
-                      : "bg-primary text-white hover:bg-primary/90"
-                  }`}
-                >
-                  Create Chart
-                </button>
+                {plans.length > 0 && (
+                  <button
+                    type="button"
+                    disabled={isRendering}
+                    onClick={handleCreateChart}
+                    className={`px-4 py-2 rounded-md text-sm font-medium self-center whitespace-nowrap ${
+                      isRendering
+                        ? "bg-gray-300 cursor-not-allowed text-gray-500"
+                        : "bg-primary text-white hover:bg-primary/90"
+                    }`}
+                  >
+                    Create Chart
+                  </button>
+                )}
               </form>
             </div>
           </div>

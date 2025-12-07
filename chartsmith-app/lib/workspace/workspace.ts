@@ -190,11 +190,27 @@ export async function createWorkspaceWithoutChat(createdType: string, userId: st
         }
       }
 
-      await client.query("COMMIT");
+      // Save the initial prompt as a pending message (no response yet)
+      // The frontend will pick this up and submit it to the AI SDK for processing
+      const chatMessageId = srs.default({ length: 12, alphanumeric: true });
+      await client.query(
+        `INSERT INTO workspace_chat (
+          id, workspace_id, created_at, sent_by, prompt, response,
+          revision_number, is_canceled, is_intent_complete,
+          is_intent_conversational, is_intent_plan, is_intent_off_topic,
+          is_intent_chart_developer, is_intent_chart_operator, is_intent_render,
+          message_from_persona
+        ) VALUES (
+          $1, $2, now(), $3, $4, NULL,
+          $5, false, false,
+          false, false, false,
+          false, false, false,
+          $6
+        )`,
+        [chatMessageId, id, userId, initialPrompt, initialRevisionNumber, ChatMessageFromPersona.AUTO]
+      );
 
-      // Note: We intentionally don't create a chat message here.
-      // The frontend will submit the initial prompt via the AI SDK,
-      // which will create the message and get the response in one flow.
+      await client.query("COMMIT");
 
     } catch (err) {
       await client.query("ROLLBACK");

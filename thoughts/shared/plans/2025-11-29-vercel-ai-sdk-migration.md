@@ -537,14 +537,14 @@ export async function POST(req: Request) {
 ### Success Criteria
 
 #### Automated Verification
-- [ ] TypeScript compiles: `npm run typecheck`
-- [ ] Lint passes: `npm run lint`
+- [x] TypeScript compiles: `npm run typecheck`
+- [x] Lint passes: `npm run lint`
 
 #### Manual Verification
-- [ ] "Create a wordpress chart" triggers plan generation
-- [ ] Plan streams with chartsmithArtifactPlan XML tags
-- [ ] Plan is parsed and displayed in UI
-- [ ] "What is Helm?" stays conversational (no plan)
+- [x] "Create a wordpress chart" triggers plan generation
+- [x] Plan streams with chartsmithArtifactPlan XML tags
+- [x] Plan is parsed and displayed in UI
+- [x] "What is Helm?" stays conversational (no plan)
 
 ---
 

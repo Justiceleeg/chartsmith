@@ -38,7 +38,7 @@ export function ChatContainer({ session }: ChatContainerProps) {
   // Note: We always call the hook to follow React rules, but only use its values when flag is enabled
   const aiChat = useAIChat({
     workspaceId: workspace?.id || "",
-    sessionToken: session?.id,
+    session,
   });
 
   // Unified interface - use AI SDK or local state based on feature flag

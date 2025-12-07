@@ -94,17 +94,25 @@ export class Parser {
       }
     }
 
-    // Find all action plans
-    const fileStartRegex = /<chartsmithActionPlan\s+type="([^"]+)"\s+action="([^"]+)"\s+path="([^"]+)"[^>]*>/g;
-    let startMatch: RegExpExecArray | null;
+    // Find all action plan tags (handles attributes in any order)
+    const tagRegex = /<chartsmithActionPlan([^>]*)(?:\/>|>)/g;
+    let tagMatch: RegExpExecArray | null;
 
-    while ((startMatch = fileStartRegex.exec(this.buffer)) !== null) {
-      if (startMatch.length !== 4) {
+    while ((tagMatch = tagRegex.exec(this.buffer)) !== null) {
+      const attributes = tagMatch[1];
+
+      // Extract individual attributes (order-independent)
+      const typeMatch = /type="([^"]+)"/.exec(attributes);
+      const actionMatch = /action="([^"]+)"/.exec(attributes);
+      const pathMatch = /path="([^"]+)"/.exec(attributes);
+
+      if (!typeMatch || !actionMatch || !pathMatch) {
         continue;
       }
-      const actionType = startMatch[1]; // "file"
-      const action = startMatch[2];     // "create" or "update" or "delete"
-      let path = startMatch[3];         // file path
+
+      const actionType = typeMatch[1]; // "file"
+      const action = actionMatch[1];   // "create" or "update" or "delete"
+      let path = pathMatch[1];         // file path
 
       // Strip any leading /
       path = path.replace(/^\//, '');
@@ -118,7 +126,7 @@ export class Parser {
         }
       }
 
-      if (!artifactExists) {
+      if (!artifactExists && !this.result.actions[path]) {
         const actionPlan: ActionPlan = {
           type: actionType,
           action: action as ActionPlan['action'],

@@ -81,7 +81,9 @@ export async function listMessagesForWorkspace(workspaceID: string): Promise<Cha
         responseConversionId: row.response_conversion_id,
         responseRollbackToRevisionNumber: row.response_rollback_to_revision_number,
         revisionNumber: row.revision_number,
-        isComplete: true,
+        // Message is complete if it has a response or was canceled
+        // (AI SDK mode saves messages without response initially)
+        isComplete: row.response !== null || row.is_canceled,
         messageFromPersona: row.message_from_persona,
       };
 

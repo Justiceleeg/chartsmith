@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect } from "react";
+import React, { useEffect, useRef } from "react";
 import { useAtom } from 'jotai'
 
 // hooks
@@ -53,8 +53,17 @@ export function WorkspaceContent({
   const [, setSelectedFile] = useAtom(selectedFileAtom);
 
 
-  // Hydrate atoms on mount and when initial values change
+  // Track which workspace we've hydrated to avoid re-hydrating on every render
+  const hydratedWorkspaceId = useRef<string | null>(null);
+
+  // Hydrate atoms on mount and when workspace changes
   useEffect(() => {
+    // Only hydrate if this is a new workspace
+    if (hydratedWorkspaceId.current === initialWorkspace.id) {
+      return;
+    }
+    hydratedWorkspaceId.current = initialWorkspace.id;
+
     setWorkspace(initialWorkspace);
 
     // hydrate the before applying pending patches based on the current state

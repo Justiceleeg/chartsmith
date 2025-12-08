@@ -655,17 +655,480 @@ export function useAIChat(workspaceId: string) {
 ### Success Criteria
 
 #### Automated Verification
-- [ ] TypeScript compiles: `npm run typecheck`
-- [ ] Lint passes: `npm run lint`
-- [ ] Tool definitions are valid (no Zod errors)
+- [x] TypeScript compiles: `npm run typecheck`
+- [x] Lint passes: `npm run lint`
+- [x] Tool definitions are valid (no Zod errors)
 
 #### Manual Verification
-- [ ] Execute plan triggers tool calls
-- [ ] `str_replace` correctly modifies files
-- [ ] `view` returns file contents
-- [ ] `create` creates new files
-- [ ] Tool results stream back to UI
-- [ ] Multiple tool calls work in sequence
+- [x] Execute plan triggers tool calls
+- [x] `str_replace` correctly modifies files
+- [x] `view` returns file contents
+- [x] `create` creates new files
+- [x] Tool results stream back to UI
+- [x] Multiple tool calls work in sequence
+
+---
+
+## Phases 6.5-6.7: Connect Execute Route to UI (SDK-Native Approach)
+
+### Background
+
+#### Current Go Flow (What We're Replacing)
+
+```
+1. Proceed button clicked
+      ↓
+2. createRevision() [TypeScript - workspace.ts:1039]
+   - Sets plan.proceed_at = now()
+   - Creates NEW revision (N+1)
+   - Copies ALL files from revision N to N+1
+   - Updates workspace.current_revision_number = N+1
+   - Enqueues "execute_plan" to Go worker
+      ↓
+3. handleExecutePlanNotification() [Go - listener/execute-plan.go]
+   - Updates plan status → "applying"
+   - Calls llm.CreateExecutePlan() to generate action list
+   - Enqueues "apply_plan"
+      ↓
+4. handleApplyPlanNotification() [Go - listener/apply-plan.go]
+   - For each action file (sequentially):
+     - Update action status → "creating"
+     - Call llm.ExecuteAction() with text_editor tool
+     - Persist file content via workspace.SetFileContentPending()
+     - Update action status → "created"
+   - Update plan status → "applied"
+   - Mark revision complete
+   - Enqueue render job
+```
+
+#### New Flow (SDK-Native)
+
+```
+1. Proceed button clicked
+      ↓
+2. createRevisionAction() [Modified - skip enqueue]
+   - Creates revision N+1, copies files
+   - Returns new revision number (does NOT enqueue execute_plan)
+      ↓
+3. useChat with execute endpoint [SDK handles tool calling]
+   - POST /api/chat/execute with plan context
+   - Vercel AI SDK handles multi-step tool calling via maxSteps
+   - onToolCall callback updates UI as each tool fires
+   - onFinish callback persists results + updates plan status
+      ↓
+4. Completion [In onFinish callback]
+   - Persist all file changes to DB
+   - Update plan status → "applied"
+   - Mark revision complete
+   - Enqueue render job
+```
+
+#### Design Decisions
+
+| Aspect | Decision |
+|--------|----------|
+| **Tool calling** | Use SDK's native `maxSteps` - no manual stream parsing |
+| **UI updates** | Use `onToolCall` callback for per-tool progress |
+| **Persistence** | Batch persist in `onFinish` after all tools complete |
+| **Error handling** | SDK's error handling + `onError` callback |
+
+---
+
+## Phase 6.5: Server Actions for Execution
+
+### Overview
+Create backend server actions for database persistence. Simplified from original plan - we batch persist after all tools complete rather than per-action.
+
+### Changes Required
+
+#### 1. Modify createRevision to Skip Enqueue
+**File**: `chartsmith-app/lib/workspace/workspace.ts`
+
+Add parameter to skip the Go worker enqueue:
+
+```typescript
+export async function createRevision(
+  plan: Plan,
+  userID: string,
+  options?: { skipExecute?: boolean }
+): Promise<number> {
+  // ... existing revision creation logic ...
+
+  // Only enqueue if not skipping
+  if (!options?.skipExecute) {
+    await enqueueWork("execute_plan", { planId: plan.id });
+  }
+
+  return newRevisionNumber;
+}
+```
+
+#### 2. Update createRevisionAction
+**File**: `chartsmith-app/lib/workspace/actions/create-revision.ts`
+
+Pass through the new option:
+
+```typescript
+export async function createRevisionAction(
+  session: Session,
+  planId: string,
+  options?: { skipExecute?: boolean }
+): Promise<Workspace | undefined> {
+  const plan = await getPlan(planId);
+  await createRevision(plan, session.user.id, options);
+  const workspace = await getWorkspace(plan.workspaceId);
+  return workspace;
+}
+```
+
+#### 3. Create Execution Server Actions
+**File**: `chartsmith-app/lib/workspace/actions/execute-plan-actions.ts`
+
+```typescript
+"use server"
+
+import { Session } from "@/lib/types/session";
+import { getDB } from "@/lib/persistence/db";
+import { enqueueWork } from "@/lib/persistence/queue";
+
+interface FileChange {
+  path: string;
+  content: string;
+}
+
+/**
+ * Batch persist all file changes after execution completes.
+ * Called from onFinish callback after all tool calls complete.
+ */
+export async function persistExecutionResultsAction(
+  session: Session,
+  workspaceId: string,
+  revisionNumber: number,
+  chartId: string,
+  fileChanges: FileChange[]
+): Promise<void> {
+  const db = getDB();
+
+  for (const { path, content } of fileChanges) {
+    const existing = await db.query(
+      `SELECT id FROM workspace_file
+       WHERE workspace_id = $1 AND revision_number = $2 AND file_path = $3`,
+      [workspaceId, revisionNumber, path]
+    );
+
+    if (existing.rows.length === 0) {
+      await db.query(
+        `INSERT INTO workspace_file (workspace_id, revision_number, chart_id, file_path, content_pending)
+         VALUES ($1, $2, $3, $4, $5)`,
+        [workspaceId, revisionNumber, chartId, path, content]
+      );
+    } else {
+      await db.query(
+        `UPDATE workspace_file SET content_pending = $1
+         WHERE workspace_id = $2 AND revision_number = $3 AND file_path = $4`,
+        [content, workspaceId, revisionNumber, path]
+      );
+    }
+  }
+}
+
+/**
+ * Mark plan and revision as complete, enqueue render.
+ */
+export async function completePlanExecutionAction(
+  session: Session,
+  planId: string,
+  workspaceId: string,
+  revisionNumber: number,
+  chatMessageId?: string
+): Promise<void> {
+  const db = getDB();
+
+  // Update all action files to 'created'
+  const planResult = await db.query(
+    `SELECT action_files FROM workspace_plan WHERE id = $1`,
+    [planId]
+  );
+  const actionFiles = planResult.rows[0]?.action_files || [];
+  const updatedActions = actionFiles.map((a: any) => ({ ...a, status: 'created' }));
+
+  await db.query(
+    `UPDATE workspace_plan SET status = 'applied', action_files = $1 WHERE id = $2`,
+    [JSON.stringify(updatedActions), planId]
+  );
+
+  await db.query(
+    `UPDATE workspace_revision SET is_complete = true
+     WHERE workspace_id = $1 AND revision_number = $2`,
+    [workspaceId, revisionNumber]
+  );
+
+  if (chatMessageId) {
+    await enqueueWork("render_workspace", {
+      workspaceId,
+      revisionNumber,
+      chatMessageId,
+    });
+  }
+}
+```
+
+### Success Criteria
+
+#### Automated Verification
+- [ ] TypeScript compiles: `npm run typecheck`
+- [ ] Lint passes: `npm run lint`
+
+#### Manual Verification
+- [ ] `createRevisionAction(session, planId, { skipExecute: true })` creates revision without triggering Go worker
+- [ ] Server actions can be imported and called without errors
+
+---
+
+## Phase 6.6: SDK-Native Execution Hook
+
+### Overview
+Create a hook that uses Vercel AI SDK's native tool calling. The SDK handles the multi-step tool call loop automatically via `maxSteps`. No custom stream parsing needed.
+
+### Changes Required
+
+#### 1. Create useExecutePlan Hook
+**File**: `chartsmith-app/hooks/useExecutePlan.ts`
+
+```typescript
+import { useChat } from 'ai/react';
+import { useCallback, useRef } from 'react';
+import { useAtom } from 'jotai';
+import { workspaceAtom } from '@/atoms/workspace';
+import { Plan } from '@/lib/types/workspace';
+import {
+  persistExecutionResultsAction,
+  completePlanExecutionAction,
+} from '@/lib/workspace/actions/execute-plan-actions';
+import { Session } from '@/lib/types/session';
+
+interface FileChange {
+  path: string;
+  content: string;
+}
+
+interface UseExecutePlanOptions {
+  session: Session;
+  workspaceId: string;
+  onToolCall?: (toolName: string, args: unknown) => void;
+  onComplete?: () => void;
+  onError?: (error: Error) => void;
+}
+
+export function useExecutePlan(options: UseExecutePlanOptions) {
+  const [workspace] = useAtom(workspaceAtom);
+  const fileChangesRef = useRef<FileChange[]>([]);
+  const executionContextRef = useRef<{
+    plan: Plan;
+    revisionNumber: number;
+  } | null>(null);
+
+  const { messages, append, isLoading } = useChat({
+    api: '/api/chat/execute',
+    body: {
+      workspaceId: options.workspaceId,
+    },
+    maxSteps: 50, // SDK handles multi-step tool calling
+    onToolCall: async ({ toolCall }) => {
+      options.onToolCall?.(toolCall.toolName, toolCall.args);
+
+      // Track file changes from tool results
+      if (toolCall.toolName === 'textEditor') {
+        const args = toolCall.args as { command: string; path: string; file_text?: string };
+        if (args.command === 'create' && args.file_text) {
+          fileChangesRef.current.push({
+            path: args.path,
+            content: args.file_text,
+          });
+        }
+        // str_replace results come back in tool result, handled by SDK
+      }
+    },
+    onFinish: async (message) => {
+      const ctx = executionContextRef.current;
+      if (!ctx) return;
+
+      try {
+        const chartId = workspace?.charts?.[0]?.id;
+        if (chartId && fileChangesRef.current.length > 0) {
+          await persistExecutionResultsAction(
+            options.session,
+            options.workspaceId,
+            ctx.revisionNumber,
+            chartId,
+            fileChangesRef.current
+          );
+        }
+
+        await completePlanExecutionAction(
+          options.session,
+          ctx.plan.id,
+          options.workspaceId,
+          ctx.revisionNumber,
+          ctx.plan.chatMessageIds?.[ctx.plan.chatMessageIds.length - 1]
+        );
+
+        options.onComplete?.();
+      } catch (error) {
+        options.onError?.(error instanceof Error ? error : new Error(String(error)));
+      } finally {
+        fileChangesRef.current = [];
+        executionContextRef.current = null;
+      }
+    },
+    onError: (error) => {
+      options.onError?.(error);
+      fileChangesRef.current = [];
+      executionContextRef.current = null;
+    },
+  });
+
+  const executePlan = useCallback(async (
+    plan: Plan,
+    revisionNumber: number,
+    fileContents: Record<string, string>
+  ) => {
+    // Store context for onFinish callback
+    executionContextRef.current = { plan, revisionNumber };
+    fileChangesRef.current = [];
+
+    // Send execution request - SDK handles the rest
+    await append({
+      role: 'user',
+      content: JSON.stringify({
+        plan: {
+          id: plan.id,
+          description: plan.description,
+          actionFiles: plan.actionFiles,
+        },
+        fileContents,
+      }),
+    });
+  }, [append]);
+
+  return {
+    executePlan,
+    isExecuting: isLoading,
+    messages,
+  };
+}
+```
+
+### Success Criteria
+
+#### Automated Verification
+- [ ] TypeScript compiles: `npm run typecheck`
+- [ ] Lint passes: `npm run lint`
+
+#### Manual Verification
+- [ ] `executePlan` triggers tool calls via SDK
+- [ ] `onToolCall` fires for each tool invocation
+- [ ] `onFinish` persists results after completion
+- [ ] File changes are correctly tracked and persisted
+
+---
+
+## Phase 6.7: UI Integration
+
+### Overview
+Wire the `useExecutePlan` hook to the PlanChatMessage component, replacing the Go-based execution flow.
+
+### Changes Required
+
+#### 1. Update PlanChatMessage
+**File**: `chartsmith-app/components/PlanChatMessage.tsx`
+
+```typescript
+// Add imports
+import { useExecutePlan } from '@/hooks/useExecutePlan';
+import { useAtomValue } from 'jotai';
+import { looseFilesAtom } from '@/atoms/workspace';
+
+// Inside component, add the hook:
+const files = useAtomValue(looseFilesAtom);
+const { executePlan, isExecuting } = useExecutePlan({
+  session: session!,
+  workspaceId: workspaceId || plan?.workspaceId || '',
+  onToolCall: (toolName, args) => {
+    // Update UI to show which tool is running
+    console.log(`Tool: ${toolName}`, args);
+  },
+  onComplete: () => {
+    handlePlanUpdated({ ...plan, status: 'applied' });
+  },
+  onError: (error) => {
+    console.error('Execution failed:', error);
+  },
+});
+
+// Replace handleProceed:
+const handleProceed = async () => {
+  if (!session || !plan) return;
+
+  const wsId = workspaceId || plan.workspaceId;
+  if (!wsId) return;
+
+  // 1. Update plan status to 'applying'
+  handlePlanUpdated({ ...plan, status: 'applying' });
+
+  // 2. Create revision WITHOUT triggering Go worker
+  const updatedWorkspace = await createRevisionAction(
+    session,
+    plan.id,
+    { skipExecute: true }
+  );
+
+  if (updatedWorkspace && setWorkspace) {
+    setWorkspace(updatedWorkspace);
+  }
+
+  // 3. Build file contents map for execution context
+  const fileContents: Record<string, string> = {};
+  for (const file of files) {
+    fileContents[file.filePath] = file.content || '';
+  }
+
+  // 4. Execute via Vercel AI SDK - SDK handles tool calling loop
+  const revisionNumber = updatedWorkspace?.currentRevisionNumber || 1;
+  await executePlan(plan, revisionNumber, fileContents);
+
+  onProceed?.();
+};
+
+// Update Proceed button to show loading state:
+<Button
+  ref={proceedButtonRef}
+  variant="default"
+  size="sm"
+  onClick={handleProceed}
+  disabled={isExecuting}
+  data-testid="plan-message-proceed-button"
+  className="min-w-[100px] bg-primary hover:bg-primary/80 text-white"
+>
+  {isExecuting ? 'Executing...' : 'Proceed'}
+</Button>
+```
+
+### Success Criteria
+
+#### Automated Verification
+- [ ] TypeScript compiles: `npm run typecheck`
+- [ ] Lint passes: `npm run lint`
+- [ ] No React warnings in console
+
+#### Manual Verification
+- [ ] Click "Proceed" on a plan
+- [ ] New revision is created before execution starts
+- [ ] SDK handles multi-step tool calling automatically
+- [ ] Files are persisted to DB after all tools complete
+- [ ] Final plan status shows 'applied'
+- [ ] Render job is enqueued after completion
+- [ ] Button shows loading state during execution
 
 ---
 

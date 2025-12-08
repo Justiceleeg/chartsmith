@@ -76,6 +76,15 @@ export function useAIChat({ workspaceId, session }: UseAIChatOptions) {
 
   const chat = useChat({
     transport,
+    onToolCall: async ({ toolCall }) => {
+      // Log tool calls for debugging
+      // The actual tool execution happens server-side in the API routes
+      console.log("[useAIChat] Tool called:", toolCall.toolName);
+
+      // Return undefined to let the server handle the tool execution
+      // If we needed client-side tool handling, we would return the result here
+      return undefined;
+    },
     onFinish: async ({ message }: { message: UIMessage }) => {
       const responseText = getMessageText(message);
       console.log("[useAIChat] Response complete:", responseText.substring(0, 100) + "...");
@@ -188,7 +197,8 @@ export function useAIChat({ workspaceId, session }: UseAIChatOptions) {
           // Check if this message's response contains plan XML
           const hasPlanXml = assistantResponse?.includes("<chartsmithArtifactPlan");
           // If it has plan XML and we have a created plan, link them
-          const responsePlanId = hasPlanXml ? lastCreatedPlanId.current : undefined;
+          // Convert null to undefined since the Message type expects string | undefined
+          const responsePlanId = hasPlanXml && lastCreatedPlanId.current ? lastCreatedPlanId.current : undefined;
 
           console.log("[useAIChat] Sync - msg.id:", msg.id, "hasPlanXml:", hasPlanXml, "responsePlanId:", responsePlanId);
 

@@ -876,8 +876,8 @@ export async function completePlanExecutionAction(
 ### Success Criteria
 
 #### Automated Verification
-- [ ] TypeScript compiles: `npm run typecheck`
-- [ ] Lint passes: `npm run lint`
+- [x] TypeScript compiles: `npm run build` (compiles successfully)
+- [x] Lint passes: `npm run lint`
 
 #### Manual Verification
 - [ ] `createRevisionAction(session, planId, { skipExecute: true })` creates revision without triggering Go worker
@@ -1022,8 +1022,8 @@ export function useExecutePlan(options: UseExecutePlanOptions) {
 ### Success Criteria
 
 #### Automated Verification
-- [ ] TypeScript compiles: `npm run typecheck`
-- [ ] Lint passes: `npm run lint`
+- [x] TypeScript compiles: `npm run build` (compiles successfully)
+- [x] Lint passes: `npm run lint`
 
 #### Manual Verification
 - [ ] `executePlan` triggers tool calls via SDK
@@ -1117,8 +1117,8 @@ const handleProceed = async () => {
 ### Success Criteria
 
 #### Automated Verification
-- [ ] TypeScript compiles: `npm run typecheck`
-- [ ] Lint passes: `npm run lint`
+- [x] TypeScript compiles: `npm run build` (compiles successfully)
+- [x] Lint passes: `npm run lint`
 - [ ] No React warnings in console
 
 #### Manual Verification

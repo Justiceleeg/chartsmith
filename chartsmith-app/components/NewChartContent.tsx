@@ -1,12 +1,14 @@
 import { useTheme } from "../contexts/ThemeContext";
 import { Session } from "@/lib/types/session";
 import { Send, Loader2 } from "lucide-react";
-import { messagesAtom, workspaceAtom, isRenderingAtom, plansAtom } from "@/atoms/workspace";
+import { messagesAtom, workspaceAtom, isRenderingAtom, plansAtom, selectedFileAtom } from "@/atoms/workspace";
 import { useAtom } from "jotai";
 import { ScrollingContent } from "./ScrollingContent";
 import { NewChartChatMessage } from "./NewChartChatMessage";
 import { createRevisionAction } from "@/lib/workspace/actions/create-revision";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
+import { useExecutePlan } from "@/hooks/useExecutePlan";
+import { PersistedFile } from "@/lib/workspace/actions/execute-plan-actions";
 
 // Feature flag to toggle between Centrifugo (old) and Vercel AI SDK (new) chat systems
 const useVercelAISDK = process.env.NEXT_PUBLIC_USE_VERCEL_AI_SDK === "true";
@@ -22,8 +24,13 @@ export function NewChartContent({ session, chatInput, setChatInput, handleSubmit
   const { theme } = useTheme();
   const [messages] = useAtom(messagesAtom);
   const [isRendering] = useAtom(isRenderingAtom);
-  const [, setWorkspace] = useAtom(workspaceAtom);
+  const [workspace, setWorkspace] = useAtom(workspaceAtom);
   const [plans] = useAtom(plansAtom);
+  const [, setSelectedFile] = useAtom(selectedFileAtom);
+  const [isCreatingChart, setIsCreatingChart] = useState(false);
+
+  // Track if we've auto-selected the first file
+  const hasAutoSelectedFileRef = useRef(false);
 
   // Show input when:
   // - AI SDK mode: always show (user needs to submit their prompt)
@@ -36,15 +43,116 @@ export function NewChartContent({ session, chatInput, setChatInput, handleSubmit
     setShowInput(useVercelAISDK || (plans.length > 0 && plans[0].status === "review"));
   }, [plans]);
 
+  // Get the plan in review status
+  const planInReview = plans.find(p => p.status === 'review');
+
+  // Set up useExecutePlan for AI SDK flow
+  const {
+    executePlan,
+    isExecuting,
+  } = useExecutePlan({
+    session,
+    workspaceId: workspace?.id || '',
+    onFilePersisted: (persistedFile: PersistedFile) => {
+      console.log(`[NewChartContent] File persisted: ${persistedFile.filePath}`);
+
+      // Update workspace state with the new file
+      setWorkspace((prevWorkspace) => {
+        if (!prevWorkspace) return prevWorkspace;
+        const updatedCharts = prevWorkspace.charts.map((chart) => {
+          if (chart.id === persistedFile.chartId) {
+            const existingFileIndex = chart.files.findIndex(
+              (f) => f.filePath === persistedFile.filePath
+            );
+            const newFile = {
+              id: persistedFile.id,
+              filePath: persistedFile.filePath,
+              content: persistedFile.content,
+              contentPending: persistedFile.contentPending,
+              revisionNumber: persistedFile.revisionNumber,
+            };
+
+            if (existingFileIndex >= 0) {
+              const updatedFiles = [...chart.files];
+              updatedFiles[existingFileIndex] = newFile;
+              return { ...chart, files: updatedFiles };
+            } else {
+              return { ...chart, files: [...chart.files, newFile] };
+            }
+          }
+          return chart;
+        });
+        return { ...prevWorkspace, charts: updatedCharts };
+      });
+
+      // Auto-select first file to show diff view immediately
+      if (!hasAutoSelectedFileRef.current) {
+        hasAutoSelectedFileRef.current = true;
+        const newFile = {
+          id: persistedFile.id,
+          filePath: persistedFile.filePath,
+          content: persistedFile.content,
+          contentPending: persistedFile.contentPending,
+          revisionNumber: persistedFile.revisionNumber,
+        };
+        setTimeout(() => {
+          setSelectedFile(newFile);
+        }, 50);
+      }
+    },
+    onComplete: () => {
+      console.log("[NewChartContent] Execution complete");
+      setIsCreatingChart(false);
+      hasAutoSelectedFileRef.current = false;
+    },
+    onError: (error) => {
+      console.error("[NewChartContent] Execution error:", error);
+      setIsCreatingChart(false);
+      hasAutoSelectedFileRef.current = false;
+    },
+  });
+
   const handleCreateChart = async () => {
     if (!session || !messages.length || !plans.length) return;
 
-    const lastPlan = plans[plans.length - 1];
+    const lastPlan = plans.find(p => p.status === 'review') || plans[plans.length - 1];
     if (!lastPlan) return;
 
-    const updatedWorkspace = await createRevisionAction(session, lastPlan.id);
-    if (updatedWorkspace) {
-      setWorkspace(updatedWorkspace);
+    setIsCreatingChart(true);
+    hasAutoSelectedFileRef.current = false;
+
+    if (useVercelAISDK) {
+      // AI SDK flow: Create revision with skipExecute, then execute via SDK
+      const updatedWorkspace = await createRevisionAction(session, lastPlan.id, { skipExecute: true });
+      if (updatedWorkspace) {
+        setWorkspace(updatedWorkspace);
+
+        // Get file contents from workspace
+        const fileContents: Record<string, string> = {};
+        updatedWorkspace.charts.forEach(chart => {
+          chart.files.forEach(file => {
+            fileContents[file.filePath] = file.content || '';
+          });
+        });
+
+        // Execute plan via SDK
+        const chartId = updatedWorkspace.charts[0]?.id;
+        await executePlan(
+          lastPlan,
+          updatedWorkspace.currentRevisionNumber,
+          fileContents,
+          chartId
+        );
+      } else {
+        setIsCreatingChart(false);
+      }
+    } else {
+      // Old flow: createRevisionAction triggers Go worker
+      const updatedWorkspace = await createRevisionAction(session, lastPlan.id);
+      if (updatedWorkspace) {
+        setWorkspace(updatedWorkspace);
+      }
+      setIsCreatingChart(false);
     }
   };
 
@@ -114,18 +222,20 @@ export function NewChartContent({ session, chatInput, setChatInput, handleSubmit
                     </button>
                   </div>
                 </div>
-                {plans.length > 0 && (
+                {/* Show "Create Chart" button when there's a plan in review status */}
+                {planInReview && (
                   <button
                     type="button"
-                    disabled={isRendering}
+                    disabled={isRendering || isCreatingChart || isExecuting || !messages.length}
                     onClick={handleCreateChart}
-                    className={`px-4 py-2 rounded-md text-sm font-medium self-center whitespace-nowrap ${
-                      isRendering
+                    className={`px-4 py-2 rounded-md text-sm font-medium self-center whitespace-nowrap flex items-center gap-2 ${
+                      isRendering || isCreatingChart || isExecuting || !messages.length
                         ? "bg-gray-300 cursor-not-allowed text-gray-500"
                         : "bg-primary text-white hover:bg-primary/90"
                     }`}
                   >
-                    Create Chart
+                    {(isCreatingChart || isExecuting) && <Loader2 className="w-4 h-4 animate-spin" />}
+                    {isCreatingChart || isExecuting ? "Creating..." : "Create Chart"}
                   </button>
                 )}
               </form>

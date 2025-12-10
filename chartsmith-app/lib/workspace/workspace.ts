@@ -1036,8 +1036,13 @@ export async function rollbackToRevision(workspaceId: string, revisionNumber: nu
   }
 }
 
-export async function createRevision(plan: Plan, userID: string): Promise<number> {
-  logger.info("Creating revision", { planId: plan.id, userID });
+export interface CreateRevisionOptions {
+  /** Skip enqueueing the execute_plan job to Go worker. Used when Vercel AI SDK handles execution. */
+  skipExecute?: boolean;
+}
+
+export async function createRevision(plan: Plan, userID: string, options?: CreateRevisionOptions): Promise<number> {
+  logger.info("Creating revision", { planId: plan.id, userID, skipExecute: options?.skipExecute });
   const db = getDB(await getParam("DB_URI"));
 
   try {
@@ -1148,7 +1153,10 @@ export async function createRevision(plan: Plan, userID: string): Promise<number
     // Commit transaction
     await db.query('COMMIT');
 
-    await enqueueWork("execute_plan", { planId: plan.id });
+    // Only enqueue execution to Go worker if not skipping
+    if (!options?.skipExecute) {
+      await enqueueWork("execute_plan", { planId: plan.id });
+    }
 
     return newRevisionNumber;
 

@@ -1,8 +1,8 @@
 "use client";
 
-import React, { useState, useRef, useEffect, useLayoutEffect, useCallback } from "react";
+import React, { useState, useRef, useEffect, useCallback } from "react";
 import ReactMarkdown from 'react-markdown';
-import { useAtom } from "jotai";
+import { useAtom, useAtomValue } from "jotai";
 
 // contexts
 import { useTheme } from "@/contexts/ThemeContext";
@@ -11,16 +11,22 @@ import { useTheme } from "@/contexts/ThemeContext";
 import { Button } from "@/components/ui/Button";
 import { FeedbackModal } from "@/components/FeedbackModal";
 
+// hooks
+import { useExecutePlan } from "@/hooks/useExecutePlan";
+
 // actions
 import { ignorePlanAction } from "@/lib/workspace/actions/ignore-plan";
 import { ThumbsUp, ThumbsDown, Send, ChevronDown, ChevronUp, Plus, Pencil, Trash2 } from "lucide-react";
 import { createRevisionAction } from "@/lib/workspace/actions/create-revision";
-import { messagesAtom, workspaceAtom, handlePlanUpdatedAtom, planByIdAtom } from "@/atoms/workspace";
+import { updatePlanStatusAction } from "@/lib/workspace/actions/update-plan-status";
+import { getWorkspaceAction } from "@/lib/workspace/actions/get-workspace";
+import { messagesAtom, workspaceAtom, handlePlanUpdatedAtom, planByIdAtom, looseFilesAtom, selectedFileAtom } from "@/atoms/workspace";
 import { createChatMessageAction } from "@/lib/workspace/actions/create-chat-message";
 
 // types
 import { Message } from "@/components/types";
 import { Session } from "@/lib/types/session";
+import { Plan } from "@/lib/types/workspace";
 
 interface PlanChatMessageProps {
   showActions?: boolean;
@@ -52,6 +58,8 @@ export function PlanChatMessage({
   const [workspaceFromAtom, setWorkspace] = useAtom(workspaceAtom);
   const [messagesFromAtom, setMessages] = useAtom(messagesAtom);
   const [, handlePlanUpdated] = useAtom(handlePlanUpdatedAtom);
+  const [, setSelectedFile] = useAtom(selectedFileAtom);
+  const files = useAtomValue(looseFilesAtom);
 
   // If workspaceId is provided, try to find the workspace in atom state
   const workspaceToUse = workspaceId
@@ -63,6 +71,128 @@ export function PlanChatMessage({
   // Fix: Use useAtom directly with planByIdAtom
   const [planGetter] = useAtom(planByIdAtom);
   const plan = planGetter(planId);
+
+  // Keep a ref to always have the latest plan (avoids stale closure issues in callbacks)
+  const planRef = useRef(plan);
+  useEffect(() => {
+    planRef.current = plan;
+  }, [plan]);
+
+  // Helper to update plan and keep ref in sync
+  const updatePlan = useCallback((updater: (plan: Plan) => Plan) => {
+    const currentPlan = planRef.current;
+    if (currentPlan) {
+      const updatedPlan = updater(currentPlan);
+      planRef.current = updatedPlan; // Update ref immediately
+      handlePlanUpdated(updatedPlan);
+    }
+  }, [handlePlanUpdated]);
+
+  // Track if we've already selected a file (to only auto-select the first one)
+  const hasAutoSelectedFileRef = useRef(false);
+
+  // Use SDK-based plan execution when session and workspaceId are available
+  const wsId = workspaceId || plan?.workspaceId || "";
+  const { executePlan, isExecuting, currentAction, completedActions, totalActions } = useExecutePlan({
+    session,
+    workspaceId: wsId,
+    onActionStart: (action, index, total) => {
+      console.log(`[PlanChatMessage] Starting action ${index + 1}/${total}: ${action.path}`);
+      // Update action file status to 'creating' to show spinner
+      updatePlan((p) => ({
+        ...p,
+        actionFiles: p.actionFiles?.map((af, i) =>
+          i === index ? { ...af, status: 'creating' } : af
+        ),
+      }));
+    },
+    onActionComplete: (action, index, total) => {
+      console.log(`[PlanChatMessage] Completed action ${index + 1}/${total}: ${action.path}`);
+      // Update action file status to 'created' to show checkmark
+      updatePlan((p) => ({
+        ...p,
+        actionFiles: p.actionFiles?.map((af, i) =>
+          i === index ? { ...af, status: 'created' } : af
+        ),
+      }));
+    },
+    onFilePersisted: (persistedFile) => {
+      console.log(`[PlanChatMessage] File persisted: ${persistedFile.filePath}`);
+
+      // Update workspace state with the new file (like handleArtifactUpdated in useCentrifugo)
+      setWorkspace((prevWorkspace) => {
+        if (!prevWorkspace) return prevWorkspace;
+
+        // Find the chart and update its files
+        const updatedCharts = prevWorkspace.charts.map((chart) => {
+          if (chart.id === persistedFile.chartId) {
+            // Check if file already exists
+            const existingIndex = chart.files.findIndex(
+              (f) => f.filePath === persistedFile.filePath
+            );
+
+            const newFile = {
+              id: persistedFile.id,
+              revisionNumber: persistedFile.revisionNumber,
+              filePath: persistedFile.filePath,
+              content: persistedFile.content,
+              contentPending: persistedFile.contentPending,
+            };
+
+            if (existingIndex >= 0) {
+              // Update existing file
+              const updatedFiles = [...chart.files];
+              updatedFiles[existingIndex] = newFile;
+              return { ...chart, files: updatedFiles };
+            } else {
+              // Add new file
+              return { ...chart, files: [...chart.files, newFile] };
+            }
+          }
+          return chart;
+        });
+
+        return { ...prevWorkspace, charts: updatedCharts };
+      });
+
+      // Auto-select the first file to show diff view immediately (like main branch)
+      if (!hasAutoSelectedFileRef.current) {
+        hasAutoSelectedFileRef.current = true;
+        console.log(`[PlanChatMessage] Auto-selecting first persisted file: ${persistedFile.filePath}`);
+
+        const newFile = {
+          id: persistedFile.id,
+          revisionNumber: persistedFile.revisionNumber,
+          filePath: persistedFile.filePath,
+          content: persistedFile.content,
+          contentPending: persistedFile.contentPending,
+        };
+
+        // Small delay to ensure workspace state has updated
+        setTimeout(() => {
+          setSelectedFile(newFile);
+        }, 50);
+      }
+    },
+    onToolCall: (toolName, args) => {
+      console.log(`[PlanChatMessage] Tool called: ${toolName}`);
+    },
+    onComplete: async () => {
+      console.log("[PlanChatMessage] Plan execution complete");
+      // Update plan status to 'applied'
+      updatePlan((p) => ({ ...p, status: 'applied' }));
+
+      // Reset auto-select flag for next execution
+      hasAutoSelectedFileRef.current = false;
+
+      onProceed?.();
+    },
+    onError: (error) => {
+      console.error("[PlanChatMessage] Plan execution failed:", error);
+      // Reset auto-select flag on error too
+      hasAutoSelectedFileRef.current = false;
+    },
+  });
 
   const [showFeedback, setShowFeedback] = useState(false);
   const [isExpanded, setIsExpanded] = useState(true);
@@ -148,11 +278,44 @@ export function PlanChatMessage({
     const wsId = workspaceId || plan.workspaceId;
     if (!wsId) return;
 
-    const updatedWorkspace = await createRevisionAction(session, plan.id);
+    // Update plan status to 'applying' in database FIRST
+    // This ensures any Centrifugo events have the correct status
+    const updatedPlanFromDB = await updatePlanStatusAction(plan.id, 'applying');
+
+    // Update local atom with the database response (ensures consistency)
+    handlePlanUpdated(updatedPlanFromDB);
+    planRef.current = updatedPlanFromDB;
+
+    // Create revision WITHOUT triggering Go worker (skipExecute: true)
+    const updatedWorkspace = await createRevisionAction(session, plan.id, { skipExecute: true });
+
+    // Update workspace atom immediately to trigger view change (chat moves left, editor appears)
+    // Since we're using skipExecute, the Go worker won't send Centrifugo events, so we must update manually
     if (updatedWorkspace && setWorkspace) {
       setWorkspace(updatedWorkspace);
     }
-    onProceed?.();
+
+    // Build file contents map for execution context
+    // Include both loose files and chart files
+    const fileContents: Record<string, string> = {};
+    for (const file of files) {
+      fileContents[file.filePath] = file.content || "";
+    }
+    // Also include chart files (for update actions on existing charts)
+    if (updatedWorkspace?.charts) {
+      for (const chart of updatedWorkspace.charts) {
+        for (const file of chart.files) {
+          fileContents[file.filePath] = file.content || "";
+        }
+      }
+    }
+
+    // Execute via Vercel AI SDK - SDK handles tool calling loop
+    const revisionNumber = updatedWorkspace?.currentRevisionNumber || 1;
+    const chartId = updatedWorkspace?.charts?.[0]?.id;
+    await executePlan(plan, revisionNumber, fileContents, chartId);
+
+    // Note: workspace update and onProceed are called in the onComplete callback
   };
 
   const handleSubmitChat = async (e: React.FormEvent) => {
@@ -230,7 +393,7 @@ export function PlanChatMessage({
                 <ReactMarkdown>{plan.description}</ReactMarkdown>
               </div>
             )}
-            {(plan.status === 'review' || plan.status === 'applying' || plan.status === 'applied') && (
+            {(plan.status === 'applying' || plan.status === 'applied') && (
               <div className="mt-4 light:border light:border-gray-200 pt-4 px-3 pb-2 rounded-lg bg-primary/5 dark:bg-dark-surface">
                 <div className="flex items-center justify-between mb-2" ref={actionsRef}>
                   <span className={`text-xs ${theme === "dark" ? "text-gray-400" : "text-gray-500"}`}>
@@ -319,10 +482,21 @@ export function PlanChatMessage({
                     variant="default"
                     size="sm"
                     onClick={handleProceed}
+                    disabled={isExecuting}
                     data-testid="plan-message-proceed-button"
-                    className="min-w-[100px] bg-primary hover:bg-primary/80 text-white"
+                    className="min-w-[100px] bg-primary hover:bg-primary/80 text-white disabled:opacity-50"
                   >
-                    Proceed
+                    {isExecuting ? (
+                      <span className="flex items-center gap-2">
+                        <div
+                          className="rounded-full h-3 w-3 border border-white border-t-transparent"
+                          style={{ animation: 'spin 1s linear infinite' }}
+                        />
+                        {totalActions > 0 ? `${completedActions}/${totalActions}` : 'Executing...'}
+                      </span>
+                    ) : (
+                      'Proceed'
+                    )}
                   </Button>
                 </div>
                 {showChatInput && plan.status === 'review' && !workspaceToUse?.currentRevisionNumber && (

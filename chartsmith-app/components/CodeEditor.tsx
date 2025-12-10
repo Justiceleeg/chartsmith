@@ -755,49 +755,71 @@ export const CodeEditor = React.memo(function CodeEditor({
 
   // Define mount handlers for both editor types
   const handleRegularEditorMount = (editor: editor.IStandaloneCodeEditor, monaco: typeof import("monaco-editor")) => {
-    editorRef.current = editor;
-    monacoRef.current = monaco;
+    // Safety check
+    if (!editor) {
+      console.warn("Regular editor mount called with invalid editor reference");
+      return;
+    }
 
-    // Add command palette shortcut
-    const commandId = 'chartsmith.openCommandPalette';
-    editor.addAction({
-      id: commandId,
-      label: 'Open Command Palette',
-      keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyK],
-      run: () => {
-        if (onCommandK) {
-          onCommandK();
+    try {
+      editorRef.current = editor;
+      monacoRef.current = monaco;
+
+      // Add command palette shortcut
+      const commandId = 'chartsmith.openCommandPalette';
+      editor.addAction({
+        id: commandId,
+        label: 'Open Command Palette',
+        keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyK],
+        run: () => {
+          if (onCommandK) {
+            onCommandK();
+          }
         }
-      }
-    });
+      });
+    } catch (error) {
+      console.warn("Error during regular editor mount:", error);
+    }
   };
 
   // Handle diff editor mount differently
   const handleDiffEditorMount = (editor: any, monaco: typeof import("monaco-editor")) => {
-    // We need to handle the diff editor mount differently
-    editorRef.current = editor.getModifiedEditor(); // Store modified editor for consistency
-    monacoRef.current = monaco;
+    // Safety check - make sure editor is valid before accessing methods
+    if (!editor || typeof editor.getModifiedEditor !== 'function') {
+      console.warn("DiffEditor mount called with invalid editor reference");
+      return;
+    }
 
-    // Add command palette shortcut to the modified editor too
-    const commandId = 'chartsmith.openCommandPalette.diffEditor';
-    editor.getModifiedEditor().addAction({
-      id: commandId,
-      label: 'Open Command Palette',
-      keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyK],
-      run: () => {
-        if (onCommandK) {
-          onCommandK();
+    try {
+      // We need to handle the diff editor mount differently
+      editorRef.current = editor.getModifiedEditor(); // Store modified editor for consistency
+      monacoRef.current = monaco;
+
+      // Add command palette shortcut to the modified editor too
+      const commandId = 'chartsmith.openCommandPalette.diffEditor';
+      editor.getModifiedEditor().addAction({
+        id: commandId,
+        label: 'Open Command Palette',
+        keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyK],
+        run: () => {
+          if (onCommandK) {
+            onCommandK();
+          }
         }
-      }
-    });
+      });
+    } catch (error) {
+      console.warn("Error during diff editor mount:", error);
+    }
   };
 
   // Create a stable key for editor rendering
+  // Only change key when the file ID or editor mode changes, not on every render
   const editorKey = selectedFile?.id || 'none';
-  const hasContentPending = selectedFile?.contentPending;
+  const hasContentPending = !!selectedFile?.contentPending && selectedFile.contentPending.length > 0;
 
-  // Generate a unique key for the editor to force re-creation when needed
-  const editorStateKey = `${editorKey}-${(hasContentPending) ? 'diff' : 'normal'}-${Date.now()}`;
+  // Generate a stable key for the editor that only changes when file or mode changes
+  // Using Date.now() would cause recreation on every render, causing Monaco disposal errors
+  const editorStateKey = `${editorKey}-${hasContentPending ? 'diff' : 'normal'}`;
 
   // Let's try a more conventional approach but with optimizations
   return (
@@ -808,31 +830,13 @@ export const CodeEditor = React.memo(function CodeEditor({
       <div className="flex-1 h-full">
         {/* Using a stable key pattern for the outer container */}
         <div key={editorStateKey} className="h-full">
-          {selectedFile?.contentPending && selectedFile.contentPending.length > 0 ? (
-            // Import DiffEditor dynamically for contentPending
+          {hasContentPending ? (
+            // DiffEditor for contentPending
             <DiffEditor
               height="100%"
               language={language}
               original={original}
               modified={modifiedContent}
-              loading={null} // Disable the loading message
-              theme={theme === "light" ? "vs" : "vs-dark"}
-              options={{
-                ...editorOptions,
-                renderSideBySide: false,
-                originalEditable: false,
-                diffCodeLens: false,
-                readOnly: true
-              }}
-              onMount={handleDiffEditorMount}
-            />
-          ) : selectedFile?.contentPending ? (
-            // DiffEditor for contentPending
-            <DiffEditor
-              height="100%"
-              language={language}
-              original={selectedFile.content}
-              modified={selectedFile.contentPending}
               loading={null} // Disable the loading message
               theme={theme === "light" ? "vs" : "vs-dark"}
               options={{

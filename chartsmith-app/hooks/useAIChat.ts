@@ -180,17 +180,84 @@ export function useAIChat({ workspaceId, session }: UseAIChatOptions) {
     }
   }, [existingMessages, chat.status, chat.messages.length, chat.sendMessage]);
 
+  // Track last synced state to prevent infinite loops
+  const lastSyncedRef = useRef<{ messageCount: number; contentLength: number; status: string; planCount: number } | null>(null);
+
+  // Debounce timer for sync to prevent rapid updates during streaming
+  const syncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Store messages in a ref so debounced callback has access to latest values
+  const chatMessagesRef = useRef(chat.messages);
+  const chatStatusRef = useRef(chat.status);
+
+  // Update refs when values change (no state update, so no re-render loop)
+  chatMessagesRef.current = chat.messages;
+  chatStatusRef.current = chat.status;
+
   // Sync AI SDK messages with atom state for display
   // This allows the UI to use a single source of truth (messagesAtom)
   useEffect(() => {
-    if (chat.messages.length > 0) {
+    const messages = chat.messages;
+    const status = chat.status;
+
+    if (messages.length === 0) {
+      return;
+    }
+
+    // Calculate total content length to detect streaming updates
+    const totalContentLength = messages.reduce((sum, msg) => sum + getMessageText(msg).length, 0);
+
+    // Check if we actually need to sync - prevent infinite update loops
+    const currentState = {
+      messageCount: messages.length,
+      contentLength: totalContentLength,
+      status: status,
+      planCount: planCreatedCount,
+    };
+
+    // Only sync if something meaningful changed
+    if (
+      lastSyncedRef.current &&
+      lastSyncedRef.current.messageCount === currentState.messageCount &&
+      lastSyncedRef.current.contentLength === currentState.contentLength &&
+      lastSyncedRef.current.status === currentState.status &&
+      lastSyncedRef.current.planCount === currentState.planCount
+    ) {
+      return; // Skip sync - nothing changed
+    }
+
+    // Clear any pending sync
+    if (syncTimerRef.current) {
+      clearTimeout(syncTimerRef.current);
+    }
+
+    // Debounce the sync to prevent rapid updates during streaming
+    // Use a short delay during streaming, immediate sync when ready
+    const delay = status === "streaming" ? 100 : 0;
+
+    const doSync = () => {
+      // Use refs to get the latest values at sync time
+      const latestMessages = chatMessagesRef.current;
+      const latestStatus = chatStatusRef.current;
+
+      // Recalculate state with latest values
+      const latestContentLength = latestMessages.reduce((sum, msg) => sum + getMessageText(msg).length, 0);
+      const latestState = {
+        messageCount: latestMessages.length,
+        contentLength: latestContentLength,
+        status: latestStatus,
+        planCount: planCreatedCount,
+      };
+
+      lastSyncedRef.current = latestState;
+
       // Pair user/assistant messages into single Message objects
       const pairedMessages: Message[] = [];
-      for (let i = 0; i < chat.messages.length; i++) {
-        const msg = chat.messages[i];
+      for (let i = 0; i < latestMessages.length; i++) {
+        const msg = latestMessages[i];
         if (msg.role === "user") {
           // Find the following assistant message if any
-          const nextMsg = chat.messages[i + 1];
+          const nextMsg = latestMessages[i + 1];
           const assistantResponse =
             nextMsg?.role === "assistant" ? getMessageText(nextMsg) : undefined;
 
@@ -199,8 +266,6 @@ export function useAIChat({ workspaceId, session }: UseAIChatOptions) {
           // If it has plan XML and we have a created plan, link them
           // Convert null to undefined since the Message type expects string | undefined
           const responsePlanId = hasPlanXml && lastCreatedPlanId.current ? lastCreatedPlanId.current : undefined;
-
-          console.log("[useAIChat] Sync - msg.id:", msg.id, "hasPlanXml:", hasPlanXml, "responsePlanId:", responsePlanId);
 
           // Strip XML plan tags from response - the plan is shown via PlanChatMessage component
           let cleanedResponse = assistantResponse;
@@ -217,9 +282,9 @@ export function useAIChat({ workspaceId, session }: UseAIChatOptions) {
             prompt: getMessageText(msg),
             response: cleanedResponse,
             responsePlanId,
-            isComplete: assistantResponse !== undefined || chat.status === "ready",
+            isComplete: assistantResponse !== undefined || latestStatus === "ready",
             // Set isIntentComplete to true when we have a response, so the UI doesn't show "thinking..."
-            isIntentComplete: assistantResponse !== undefined || chat.status === "ready",
+            isIntentComplete: assistantResponse !== undefined || latestStatus === "ready",
             workspaceId,
           });
 
@@ -231,7 +296,19 @@ export function useAIChat({ workspaceId, session }: UseAIChatOptions) {
       // Simply replace all messages with AI SDK messages
       // The AI SDK is now the source of truth for this chat session
       setMessages(pairedMessages);
+    };
+
+    if (delay > 0) {
+      syncTimerRef.current = setTimeout(doSync, delay);
+    } else {
+      doSync();
     }
+
+    return () => {
+      if (syncTimerRef.current) {
+        clearTimeout(syncTimerRef.current);
+      }
+    };
   }, [chat.messages, chat.status, workspaceId, setMessages, planCreatedCount]);
 
   // Input change handler

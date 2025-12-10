@@ -73,10 +73,47 @@ Important workflow instructions:
 
 export async function POST(req: Request) {
   try {
-    const body: ExecuteRequest = await req.json();
-    const { plan, action, currentContent = '' } = body;
+    const body = await req.json();
+
+    // Handle both direct requests and useChat message format
+    let plan: ExecuteRequest['plan'] | undefined;
+    let action: ActionPlan | undefined;
+    let currentContent = '';
+
+    if (body.plan && body.action) {
+      // Direct request format
+      plan = body.plan;
+      action = body.action;
+      currentContent = body.currentContent || '';
+    } else if (body.messages && Array.isArray(body.messages)) {
+      // useChat message format - extract from the last user message
+      const lastUserMessage = body.messages
+        .filter((m: { role: string }) => m.role === 'user')
+        .pop();
+
+      if (lastUserMessage) {
+        try {
+          // The content might be in lastUserMessage.content or lastUserMessage.parts
+          let content = lastUserMessage.content;
+          if (!content && lastUserMessage.parts) {
+            const textPart = lastUserMessage.parts.find((p: { type: string }) => p.type === 'text');
+            content = textPart?.text;
+          }
+
+          if (content) {
+            const parsed = JSON.parse(content);
+            plan = parsed.plan;
+            action = parsed.action;
+            currentContent = parsed.currentContent || '';
+          }
+        } catch (parseError) {
+          console.error('[Execute] Failed to parse message content:', parseError);
+        }
+      }
+    }
 
     if (!plan || !action) {
+      console.error('[Execute] Missing plan or action. Body:', JSON.stringify(body).substring(0, 500));
       return new Response(
         JSON.stringify({ error: 'Plan and action are required' }),
         { status: 400, headers: { 'Content-Type': 'application/json' } }

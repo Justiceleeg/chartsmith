@@ -147,7 +147,7 @@ export function NewChartChatMessage({
   const SortedContent = () => {
     return (
       <>
-        {message?.response && (
+        {message?.response && !message?.responsePlanId && (
           <div className="mb-4">
             <ReactMarkdown>{message.response}</ReactMarkdown>
           </div>
@@ -155,11 +155,6 @@ export function NewChartChatMessage({
 
         {message?.responsePlanId && (
           <div className="w-full mb-4">
-            {message.response && (
-              <div className="border-t border-gray-200 dark:border-dark-border/30 pt-4 mb-2">
-                <div className="text-xs text-gray-500 dark:text-gray-400 mb-2">Plan:</div>
-              </div>
-            )}
             <PlanChatMessage
               planId={message.responsePlanId}
               showActions={false}

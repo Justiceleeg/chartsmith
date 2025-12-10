@@ -6,10 +6,22 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/replicatedhq/chartsmith/pkg/workspace/types"
 )
+
+// contains checks if a string contains a substring
+func contains(s, substr string) bool {
+	return strings.Contains(s, substr)
+}
+
+// fileExists checks if a file exists
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
 
 func PublishChartExec(files []types.File, workspaceID string, chartName string) error {
 	fakeKubeconfig := `apiVersion: v1
@@ -69,6 +81,42 @@ func runHelmPublish(dir string, workspaceID string, chartName string, kubeconfig
 	versionOutput, _ := versionCmd.CombinedOutput()
 	fmt.Printf("Helm version:\n%s\n", string(versionOutput))
 
+	// Check if Chart.yaml has dependencies and run helm dependency update if needed
+	chartYamlPath := filepath.Join(dir, "Chart.yaml")
+	if _, err := os.Stat(chartYamlPath); err == nil {
+		// Check if there's a charts/ directory or Chart.lock - if dependencies exist
+		chartsDir := filepath.Join(dir, "charts")
+		chartLock := filepath.Join(dir, "Chart.lock")
+
+		// Read Chart.yaml to check for dependencies
+		chartContent, readErr := os.ReadFile(chartYamlPath)
+		if readErr == nil && (contains(string(chartContent), "dependencies:")) {
+			fmt.Printf("Chart has dependencies, running helm dependency update...\n")
+
+			// Create charts directory if it doesn't exist
+			if _, err := os.Stat(chartsDir); os.IsNotExist(err) {
+				os.MkdirAll(chartsDir, 0755)
+			}
+
+			// Run helm dependency update to download dependencies
+			depCmd := exec.CommandContext(ctx, "helm", "dependency", "update", dir)
+			depCmd.Env = append(os.Environ(), "KUBECONFIG="+kubeconfig)
+			depOutput, depErr := depCmd.CombinedOutput()
+			fmt.Printf("Helm dependency update output:\n%s\n", string(depOutput))
+
+			if depErr != nil {
+				// If dependency update fails, try to remove the dependencies section
+				// This allows charts to be published even if dependencies can't be resolved
+				fmt.Printf("Warning: helm dependency update failed, attempting to publish without dependencies\n")
+
+				// Remove Chart.lock if it exists (might be stale)
+				if _, err := os.Stat(chartLock); err == nil {
+					os.Remove(chartLock)
+				}
+			}
+		}
+	}
+
 	// SIMPLIFIED APPROACH: Package the chart first
 	fmt.Printf("Packaging chart...\n")
 	packageCmd := exec.CommandContext(ctx, "helm", "package", dir, "--destination", os.TempDir())
@@ -80,18 +128,51 @@ func runHelmPublish(dir string, workspaceID string, chartName string, kubeconfig
 		return fmt.Errorf("failed to package chart: %w\nOutput: %s", err, string(packageOutput))
 	}
 
-	// Find the newly created package file
-	packagePattern := filepath.Join(os.TempDir(), fmt.Sprintf("%s-*.tgz", chartName))
-	matches, err := filepath.Glob(packagePattern)
-	if err != nil {
-		return fmt.Errorf("failed to find package: %w", err)
+	// Parse the package output to get the actual filename
+	// Output format: "Successfully packaged chart and saved it to: /path/to/chart-version.tgz"
+	var chartPackage string
+	outputStr := string(packageOutput)
+	if idx := strings.Index(outputStr, "saved it to: "); idx != -1 {
+		chartPackage = strings.TrimSpace(outputStr[idx+len("saved it to: "):])
+		// Remove any trailing newlines
+		chartPackage = strings.Split(chartPackage, "\n")[0]
+		fmt.Printf("Parsed chart package path: %s\n", chartPackage)
 	}
 
-	if len(matches) == 0 {
-		return fmt.Errorf("no chart package found matching %s", packagePattern)
+	// Fallback: try to find the package using the chartName parameter
+	if chartPackage == "" || !fileExists(chartPackage) {
+		packagePattern := filepath.Join(os.TempDir(), fmt.Sprintf("%s-*.tgz", chartName))
+		matches, err := filepath.Glob(packagePattern)
+		if err != nil {
+			return fmt.Errorf("failed to find package: %w", err)
+		}
+
+		if len(matches) == 0 {
+			// Try wildcard pattern as last resort
+			packagePattern = filepath.Join(os.TempDir(), "*.tgz")
+			matches, err = filepath.Glob(packagePattern)
+			if err != nil {
+				return fmt.Errorf("failed to find package with wildcard: %w", err)
+			}
+			if len(matches) == 0 {
+				return fmt.Errorf("no chart package found in %s", os.TempDir())
+			}
+			// Find the most recently modified .tgz file
+			var newestFile string
+			var newestTime int64
+			for _, match := range matches {
+				info, err := os.Stat(match)
+				if err == nil && info.ModTime().Unix() > newestTime {
+					newestTime = info.ModTime().Unix()
+					newestFile = match
+				}
+			}
+			chartPackage = newestFile
+		} else {
+			chartPackage = matches[0]
+		}
 	}
 
-	chartPackage := matches[0] // Use the first match
 	fmt.Printf("Using chart package: %s\n", chartPackage)
 
 	// Tag the chart with the workspace ID to make it uniquely identifiable

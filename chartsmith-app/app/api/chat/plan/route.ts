@@ -125,7 +125,6 @@ export async function POST(req: NextRequest) {
       model,
       system: systemPrompt,
       messages: fullMessages,
-      maxTokens: 8192,
     });
 
     // Use toUIMessageStreamResponse for integration with useChat hook (AI SDK v5)

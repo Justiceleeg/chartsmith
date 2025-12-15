@@ -145,7 +145,6 @@ async function handlePlanRequest(
     model,
     system: systemPrompt,
     messages: fullMessages,
-    maxTokens: 8192,
   });
 
   return result.toUIMessageStreamResponse();

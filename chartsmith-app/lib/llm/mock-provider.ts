@@ -1,9 +1,10 @@
 /**
  * Mock LLM provider for testing without API calls.
- * Uses Vercel AI SDK's MockLanguageModelV1 for realistic streaming behavior.
+ * Uses Vercel AI SDK's MockLanguageModelV2 for realistic streaming behavior.
  */
 
-import { MockLanguageModelV1 } from 'ai/test';
+import { MockLanguageModelV2, simulateReadableStream } from 'ai/test';
+import type { LanguageModelV2StreamPart } from '@ai-sdk/provider';
 
 /**
  * Create a mock model that returns predefined responses.
@@ -14,18 +15,28 @@ import { MockLanguageModelV1 } from 'ai/test';
  */
 export function createMockModel(responses: string[]) {
   let callIndex = 0;
-  return new MockLanguageModelV1({
-    doStream: async () => ({
-      stream: new ReadableStream({
-        start(controller) {
-          const response = responses[callIndex++] || 'Mock response';
-          controller.enqueue({ type: 'text-delta', textDelta: response });
-          controller.enqueue({ type: 'finish', finishReason: 'stop', usage: { promptTokens: 10, completionTokens: 20 } });
-          controller.close();
+
+  return new MockLanguageModelV2({
+    doStream: async () => {
+      const response = responses[callIndex++] || 'Mock response';
+      const textId = `text-${Date.now()}`;
+
+      const chunks: LanguageModelV2StreamPart[] = [
+        { type: 'text-start', id: textId },
+        { type: 'text-delta', id: textId, delta: response },
+        { type: 'text-end', id: textId },
+        {
+          type: 'finish',
+          finishReason: 'stop',
+          usage: { inputTokens: 10, outputTokens: 20, totalTokens: 30 },
         },
-      }),
-      rawCall: { rawPrompt: null, rawSettings: {} },
-    }),
+      ];
+
+      return {
+        stream: simulateReadableStream({ chunks, chunkDelayInMs: 10 }),
+        rawCall: { rawPrompt: null, rawSettings: {} },
+      };
+    },
   });
 }
 

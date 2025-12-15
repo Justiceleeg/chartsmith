@@ -44,7 +44,9 @@ export async function POST(req: NextRequest) {
       messages,
     });
 
-    return result.toDataStreamResponse();
+    // Use toTextStreamResponse for simple text streaming (curl-friendly)
+    // Switch to toUIMessageStreamResponse when integrating with useChat hook
+    return result.toTextStreamResponse();
   } catch (error) {
     console.error('Chat API error:', error);
     return new Response(JSON.stringify({ error: 'Internal Server Error' }), {

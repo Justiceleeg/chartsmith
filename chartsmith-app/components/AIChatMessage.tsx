@@ -5,7 +5,7 @@ import Image from "next/image";
 import ReactMarkdown from "react-markdown";
 import { useTheme } from "../contexts/ThemeContext";
 import { Session } from "@/lib/types/session";
-import type { UIMessage } from "ai";
+import type { UIMessage } from "@ai-sdk/react";
 
 interface AIChatMessageProps {
   message: UIMessage;
@@ -23,14 +23,11 @@ export function AIChatMessage({ message, session }: AIChatMessageProps) {
   const isUser = message.role === "user";
   const isAssistant = message.role === "assistant";
 
-  // Get the text content from the message
-  const textContent =
-    typeof message.content === "string"
-      ? message.content
-      : message.parts
-          ?.filter((part) => part.type === "text")
-          .map((part) => part.text)
-          .join("") || "";
+  // Get the text content from the message parts (v5 API)
+  const textContent = message.parts
+    ?.filter((part): part is { type: "text"; text: string } => part.type === "text")
+    .map((part) => part.text)
+    .join("") || "";
 
   if (isUser) {
     return (

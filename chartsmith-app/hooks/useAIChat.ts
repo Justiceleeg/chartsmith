@@ -1,7 +1,8 @@
 "use client";
 
-import { useChat, UseChatOptions } from "ai/react";
-import { useCallback, useEffect, useState } from "react";
+import { useChat } from "@ai-sdk/react";
+import { DefaultChatTransport, UIMessage } from "ai";
+import { useCallback, useEffect, useState, ChangeEvent } from "react";
 import { useAtom } from "jotai";
 import { messagesAtom } from "@/atoms/workspace";
 import { Session } from "@/lib/types/session";
@@ -14,12 +15,13 @@ interface UseAIChatOptions {
 }
 
 /**
- * Hook for AI chat using Vercel AI SDK.
+ * Hook for AI chat using Vercel AI SDK v5.
  * Provides streaming chat with integration to existing atom state.
  */
 export function useAIChat({ session, workspaceId }: UseAIChatOptions) {
   const [, setMessages] = useAtom(messagesAtom);
   const [extensionToken, setExtensionToken] = useState<string | null>(null);
+  const [input, setInput] = useState("");
 
   // Get extension token on mount
   useEffect(() => {
@@ -34,20 +36,31 @@ export function useAIChat({ session, workspaceId }: UseAIChatOptions) {
     getToken();
   }, [session]);
 
-  const chatOptions: UseChatOptions = {
+  // Create transport with auth headers
+  const transport = new DefaultChatTransport({
     api: "/api/chat",
-    body: { workspaceId },
     headers: extensionToken
       ? { Authorization: `Bearer ${extensionToken}` }
       : undefined,
-    onFinish: async (message) => {
+    body: { workspaceId },
+  });
+
+  const chat = useChat({
+    transport,
+    onFinish: (response: { message: UIMessage }) => {
+      const message = response.message;
       // Convert AI SDK message to our Message format and update atom
+      const textContent = message.parts
+        ?.filter((part): part is { type: "text"; text: string } => part.type === "text")
+        .map((part) => part.text)
+        .join("") || "";
+
       const newMessage: Message = {
         id: message.id,
         prompt: "", // The prompt is tracked separately
-        response: message.content,
+        response: textContent,
         isComplete: true,
-        createdAt: message.createdAt,
+        createdAt: new Date(), // UIMessage v5 doesn't have createdAt
         workspaceId,
         userId: session.user.id,
       };
@@ -66,55 +79,65 @@ export function useAIChat({ session, workspaceId }: UseAIChatOptions) {
       // Note: DB persistence will be added in Phase 7
       // For now, messages are only tracked in atom state
     },
-    onError: (error) => {
+    onError: (error: Error) => {
       console.error("Chat error:", error);
     },
-  };
+  });
 
-  const chat = useChat(chatOptions);
+  // Handle input change
+  const handleInputChange = useCallback(
+    (e: ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+      setInput(e.target.value);
+    },
+    []
+  );
 
-  // Custom submit handler that also tracks the user prompt in atom state
+  // Custom submit handler that sends the message
   const handleSubmit = useCallback(
-    async (
-      e?: { preventDefault?: () => void },
-      options?: { data?: Record<string, string> }
-    ) => {
+    async (e?: { preventDefault?: () => void }) => {
+      e?.preventDefault?.();
+
       if (!extensionToken) {
         console.error("Extension token not ready");
         return;
       }
 
-      const userPrompt = chat.input;
-
-      // Add user message to atom state before sending
-      if (userPrompt.trim()) {
-        const userMessage: Message = {
-          id: `user-${Date.now()}`, // Temporary ID, will be replaced by server
-          prompt: userPrompt,
-          response: undefined,
-          isComplete: false,
-          createdAt: new Date(),
-          workspaceId,
-          userId: session.user.id,
-        };
-
-        setMessages((prev) => [...prev, userMessage]);
+      if (!input.trim()) {
+        return;
       }
 
-      // Call the original submit
-      chat.handleSubmit(e, options);
+      const userPrompt = input;
+
+      // Add user message to atom state before sending
+      const userMessage: Message = {
+        id: `user-${Date.now()}`, // Temporary ID
+        prompt: userPrompt,
+        response: undefined,
+        isComplete: false,
+        createdAt: new Date(),
+        workspaceId,
+        userId: session.user.id,
+      };
+
+      setMessages((prev) => [...prev, userMessage]);
+
+      // Clear input
+      setInput("");
+
+      // Send message using v5 API
+      chat.sendMessage({ text: userPrompt });
     },
-    [chat, extensionToken, setMessages, workspaceId, session.user.id]
+    [chat, extensionToken, input, setMessages, workspaceId, session.user.id]
   );
 
   return {
     messages: chat.messages,
-    input: chat.input,
-    handleInputChange: chat.handleInputChange,
+    input,
+    handleInputChange,
     handleSubmit,
     isLoading: chat.status === "streaming" || chat.status === "submitted",
     error: chat.error,
-    setInput: chat.setInput,
+    setInput,
     status: chat.status,
     // Expose raw chat object for advanced use cases
     _chat: chat,

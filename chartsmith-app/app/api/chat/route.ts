@@ -44,8 +44,8 @@ export async function POST(req: NextRequest) {
       messages,
     });
 
-    // Use toDataStreamResponse for integration with useChat hook
-    return result.toDataStreamResponse();
+    // Use toUIMessageStreamResponse for integration with useChat hook (AI SDK v5)
+    return result.toUIMessageStreamResponse();
   } catch (error) {
     console.error('Chat API error:', error);
     return new Response(JSON.stringify({ error: 'Internal Server Error' }), {

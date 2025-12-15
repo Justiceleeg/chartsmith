@@ -71,11 +71,12 @@ export class Parser {
   parseArtifacts(chunk: string): void {
     this.buffer += chunk;
 
-    // Find complete artifacts first
-    const completeRegex = /<chartsmithArtifact([^>]*)>([\s\S]*?)<\/chartsmithArtifact>/g;
-    let match;
+    // Find complete artifacts first using matchAll to avoid regex state issues
+    // Use negative lookahead (?!Plan) to avoid matching <chartsmithArtifactPlan>
+    const completeRegex = /<chartsmithArtifact(?!Plan)([^>]*)>([\s\S]*?)<\/chartsmithArtifact>/g;
+    const matches = [...this.buffer.matchAll(completeRegex)];
 
-    while ((match = completeRegex.exec(this.buffer)) !== null) {
+    for (const match of matches) {
       if (match.length !== 3) {
         continue;
       }
@@ -94,13 +95,20 @@ export class Parser {
       this.buffer = this.buffer.replace(match[0], '');
     }
 
-    // Check for partial artifacts
-    const partialStart = this.buffer.lastIndexOf('<chartsmithArtifact');
+    // Check for partial artifacts (incomplete tags still being streamed)
+    // Find <chartsmithArtifact but not <chartsmithArtifactPlan
+    const partialRegex = /<chartsmithArtifact(?!Plan)/g;
+    let partialMatch;
+    let partialStart = -1;
+    while ((partialMatch = partialRegex.exec(this.buffer)) !== null) {
+      partialStart = partialMatch.index;
+    }
+
     if (partialStart !== -1) {
       const partialContent = this.buffer.substring(partialStart);
 
       // Try to extract path from the opening tag
-      const pathMatch = partialContent.match(/<chartsmithArtifact[^>]*path="([^"]*)"/);
+      const pathMatch = partialContent.match(/<chartsmithArtifact(?!Plan)[^>]*path="([^"]*)"/);
       if (pathMatch && pathMatch[1]) {
         const path = pathMatch[1];
 
